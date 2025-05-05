@@ -1,12 +1,17 @@
 const express = require("express");
-const axios = require("axios");
 const bodyParser = require("body-parser");
-const fs = require("fs");
+const axios = require("axios");
+const config = require("./config.json");
 
-const config = JSON.parse(fs.readFileSync("config.json", "utf8"));
 const app = express();
 app.use(bodyParser.json());
 
+const PORT = process.env.PORT || 10000;
+
+// Verzögerungsfunktion
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Webhook-Endpunkt
 app.post("/webhook", async (req, res) => {
     const order = req.body;
 
@@ -17,6 +22,7 @@ app.post("/webhook", async (req, res) => {
         if (!sku) continue;
 
         try {
+            // Variante mit gleicher SKU finden
             const variantsRes = await axios.get(
                 `https://${config.shop}.myshopify.com/admin/api/2023-10/variants.json?sku=${encodeURIComponent(sku)}`,
                 {
@@ -27,9 +33,12 @@ app.post("/webhook", async (req, res) => {
                 }
             );
 
+            await sleep(1000); // 1 Sekunde warten
+
             for (const variant of variantsRes.data.variants) {
                 const inventoryItemId = variant.inventory_item_id;
 
+                // Lagerstand abrufen
                 const levelsRes = await axios.get(
                     `https://${config.shop}.myshopify.com/admin/api/2023-10/inventory_levels.json?inventory_item_ids=${inventoryItemId}`,
                     {
@@ -39,9 +48,12 @@ app.post("/webhook", async (req, res) => {
                     }
                 );
 
+                await sleep(1000);
+
                 for (const level of levelsRes.data.inventory_levels) {
                     const newQty = Math.max(level.available - quantity, 0);
 
+                    // Lagerbestand aktualisieren
                     await axios.post(
                         `https://${config.shop}.myshopify.com/admin/api/2023-10/inventory_levels/set.json`,
                         {
@@ -56,6 +68,8 @@ app.post("/webhook", async (req, res) => {
                             }
                         }
                     );
+
+                    await sleep(1000);
                 }
             }
         } catch (error) {
@@ -66,5 +80,6 @@ app.post("/webhook", async (req, res) => {
     res.status(200).send("OK");
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Server läuft auf Port", PORT));
+app.listen(PORT, () => {
+    console.log(`Server läuft auf Port ${PORT}`);
+});
