@@ -1,75 +1,20 @@
 const express = require('express');
-const axios = require('axios');
-const bodyParser = require('body-parser');
-
 const app = express();
-app.use(bodyParser.json());
+const PORT = process.env.PORT || 10000;
 
-const SHOP = 'https://merotec-shop.myshopify.com';
-const ADMIN_API_TOKEN = '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';
+// JSON-Middleware, damit der Server Shopify-Daten lesen kann
+app.use(express.json());
 
-app.post('/webhook/order-created', async (req, res) => {
-    const order = req.body;
+// Test-Webhook-Endpunkt
+app.post('/webhook', (req, res) => {
+  console.log('📦 Neue Bestellung empfangen!');
+  console.log(JSON.stringify(req.body, null, 2)); // zeigt die Bestellung in der Konsole
 
-    for (const lineItem of order.line_items) {
-        const sku = lineItem.sku;
-        const quantity = lineItem.quantity;
-
-        if (!sku) continue;
-
-        // Hole alle Varianten mit dieser SKU
-        const variants = await findVariantsBySKU(sku);
-
-        for (const variant of variants) {
-            const inventoryItemId = variant.inventory_item_id;
-
-            // Hole den aktuellen Lagerbestand
-            const inventoryLevels = await axios.get(
-                `https://${SHOP}/admin/api/2023-10/inventory_levels.json?inventory_item_ids=${inventoryItemId}`,
-                {
-                    headers: {
-                        'X-Shopify-Access-Token': ADMIN_API_TOKEN,
-                    },
-                }
-            );
-
-            for (const level of inventoryLevels.data.inventory_levels) {
-                // Reduziere den Bestand um die verkaufte Menge
-                const newQty = Math.max(level.available - quantity, 0);
-
-                // Aktualisiere den Bestand
-                await axios.post(
-                    `https://${SHOP}/admin/api/2023-10/inventory_levels/set.json`,
-                    {
-                        location_id: level.location_id,
-                        inventory_item_id: inventoryItemId,
-                        available: newQty,
-                    },
-                    {
-                        headers: {
-                            'X-Shopify-Access-Token': ADMIN_API_TOKEN,
-                        },
-                    }
-                );
-            }
-        }
-    }
-
-    res.status(200).send('ok');
+  // Sende erfolgreiche Antwort an Shopify
+  res.status(200).send('OK');
 });
 
-async function findVariantsBySKU(sku) {
-    const response = await axios.get(
-        `https://${SHOP}/admin/api/2023-10/variants.json?sku=${encodeURIComponent(sku)}`,
-        {
-            headers: {
-                'X-Shopify-Access-Token': ADMIN_API_TOKEN,
-            },
-        }
-    );
-    return response.data.variants;
-}
-
-app.listen(3000, () => {
-    console.log('Webhook listener running on port 3000');
+// Start Server
+app.listen(PORT, () => {
+  console.log(`✅ Server läuft auf Port ${PORT}`);
 });
