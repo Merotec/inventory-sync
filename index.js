@@ -1,65 +1,114 @@
 const express = require('express');
-const bodyParser = require('body-parser');
 const axios = require('axios');
-
 const app = express();
-const port = process.env.PORT || 3000;
+const PORT = 10000;
 
 const SHOP = 'merotec-shop.myshopify.com';
 const ADMIN_API_TOKEN = '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';
-const API_URL = `https://merotec-shop.myshopify.com/admin/api/2025-04/`;
 
-app.use(bodyParser.json());
+const processedOrderIds = new Set();
 
-// Shopify Webhook für Bestandsänderungen
-app.post('/webhook/stock', async (req, res) => {
-  const webhookData = req.body;
+app.use(express.json());
 
-  if (!webhookData || !webhookData.inventory_item_id) {
-    return res.status(400).send('Invalid data');
-  }
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-  const inventoryItemId = webhookData.inventory_item_id;
-  const newStockLevel = webhookData.quantity;
-
+async function findVariantsBySKU(sku) {
   try {
-    // Beispiel: Hole die Bestandsinformationen von Shopify
-    const stockResponse = await axios.get(`${API_URL}inventory_levels.json`, {
-      headers: {
-        'X-Shopify-Access-Token': ADMIN_API_TOKEN,
-      },
-      params: {
-        inventory_item_ids: inventoryItemId,
-      },
-    });
-
-    // Bestandsinformationen abrufen
-    const inventoryLevel = stockResponse.data.inventory_levels.find(level => level.inventory_item_id === inventoryItemId);
-
-    if (inventoryLevel) {
-      console.log(`Bestand für SKU mit ID ${inventoryItemId} auf Shopify auf ${newStockLevel} geändert.`);
-      
-      // Hier kannst du den Bestand zu einem externen System (z.B. ERP) synchronisieren
-      const syncResponse = await axios.post('https://dein-erp-system.com/api/sync_stock', {
-        inventory_item_id: inventoryItemId,
-        quantity: newStockLevel,
-      });
-
-      if (syncResponse.status === 200) {
-        return res.status(200).send('Stock synchronized successfully');
-      } else {
-        return res.status(500).send('Failed to synchronize stock');
+    const response = await axios.get(
+      `https://${SHOP}/admin/api/2023-10/variants.json?sku=${sku}`,
+      {
+        headers: {
+          'X-Shopify-Access-Token': ADMIN_API_TOKEN,
+        },
       }
-    } else {
-      return res.status(404).send('Inventory item not found');
-    }
-
-  } catch (error) {
-    console.error('Fehler bei der Synchronisierung:', error);
-    return res.status(500).send('Internal Server Error');
+    );
+    return response.data.variants || [];
+  } catch (err) {
+    console.error(`❌ Fehler beim Abrufen von Varianten für SKU ${sku}: ${err.message}`);
+    return [];
   }
+}
+
+app.post('/webhook/order-created', async (req, res) => {
+  const order = req.body;
+
+  if (!order || !order.id) {
+    console.error('❌ Ungültige Bestelldaten erhalten');
+    return res.status(400).send('Bad Request');
+  }
+
+  if (processedOrderIds.has(order.id)) {
+    console.log(`📦 Bestellung mit ID ${order.id} wurde bereits bearbeitet. Überspringen.`);
+    return res.status(200).send('Already processed');
+  }
+
+  processedOrderIds.add(order.id);
+  console.log(`📦 Neue Bestellung empfangen! ID: ${order.id}`);
+
+  const updatedInventoryItems = new Set();
+
+  for (const lineItem of order.line_items) {
+    const sku = lineItem.sku;
+    const orderedQuantity = lineItem.quantity;
+
+    if (!sku) continue;
+
+    try {
+      const variants = await findVariantsBySKU(sku);
+      let referenzLevel = null;
+
+      for (const variant of variants) {
+        const inventoryItemId = variant.inventory_item_id;
+
+        if (updatedInventoryItems.has(inventoryItemId)) continue;
+
+        const inventoryResponse = await axios.get(
+          `https://${SHOP}/admin/api/2023-10/inventory_levels.json?inventory_item_ids=${inventoryItemId}`,
+          {
+            headers: {
+              'X-Shopify-Access-Token': ADMIN_API_TOKEN,
+            },
+          }
+        );
+
+        const currentLevel = inventoryResponse.data.inventory_levels[0];
+
+        if (!referenzLevel) {
+          referenzLevel = currentLevel.available - orderedQuantity;
+          if (referenzLevel < 0) referenzLevel = 0;
+        }
+
+        if (currentLevel.available !== referenzLevel) {
+          await axios.post(
+            `https://${SHOP}/admin/api/2023-10/inventory_levels/set.json`,
+            {
+              location_id: currentLevel.location_id,
+              inventory_item_id: inventoryItemId,
+              available: referenzLevel,
+            },
+            {
+              headers: {
+                'X-Shopify-Access-Token': ADMIN_API_TOKEN,
+                'Content-Type': 'application/json',
+              },
+            }
+          );
+
+          console.log(`✅ SKU ${sku}: Neuer Bestand = ${referenzLevel}`);
+          updatedInventoryItems.add(inventoryItemId);
+          await sleep(500);
+        }
+      }
+    } catch (err) {
+      console.error(`❌ Fehler bei SKU ${sku}: ${err.message}`);
+    }
+  }
+
+  res.status(200).send('OK');
 });
 
-app.listen(port, () => {
-  console.log(`Server läuft auf Port ${port}`);
+app.listen(PORT, () => {
+  console.log(`✅ Server läuft auf Port ${PORT}`);
 });
