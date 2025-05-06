@@ -102,7 +102,8 @@ app.post('/webhook/order-created', async (req, res) => {
             }
           );
 
-          console.log(`✅ SKU ${sku}: Neuer Bestand = ${referenzLevel}`);
+          // Log mit Artikelname und Bestellmenge
+          console.log(`✅ SKU ${sku} für Artikel "${lineItem.name}" (Bestell-ID: ${order.id}, Menge: ${orderedQuantity}): Neuer Bestand = ${referenzLevel}`);
           updatedInventoryItems.add(inventoryItemId);
           await sleep(500);
         }
