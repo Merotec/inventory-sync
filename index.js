@@ -1,77 +1,75 @@
 const express = require('express');
 const axios = require('axios');
-require('dotenv').config();
+const bodyParser = require('body-parser');
 
 const app = express();
-const PORT = process.env.PORT || 10000;
+app.use(bodyParser.json());
 
-app.use(express.json());
+const SHOP = 'https://merotec-shop.myshopify.com';
+const ADMIN_API_TOKEN = 'your-admin-api-access-token';
 
-const headers = {
-  'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN,
-  'Content-Type': 'application/json',
-};
-
-// Webhook-Endpunkt für Bestellungen
-app.post('/webhook', async (req, res) => {
-  try {
+app.post('/webhook/order-created', async (req, res) => {
     const order = req.body;
 
-    for (const item of order.line_items) {
-      const sku = item.sku;
-      const quantityOrdered = item.quantity;
+    for (const lineItem of order.line_items) {
+        const sku = lineItem.sku;
+        const quantity = lineItem.quantity;
 
-      console.log(`SKU ${sku} wurde bestellt (${quantityOrdered})`);
+        if (!sku) continue;
 
-      // Alle Varianten mit dieser SKU abrufen
-      const products = await axios.get(`https://${SHOPIFY_STORE}/admin/api/2023-10/products.json`, { headers });
+        // Hole alle Varianten mit dieser SKU
+        const variants = await findVariantsBySKU(sku);
 
-      const matchingVariants = [];
+        for (const variant of variants) {
+            const inventoryItemId = variant.inventory_item_id;
 
-      for (const product of products.data.products) {
-        for (const variant of product.variants) {
-          if (variant.sku === sku) {
-            matchingVariants.push(variant);
-          }
+            // Hole den aktuellen Lagerbestand
+            const inventoryLevels = await axios.get(
+                `https://${SHOP}/admin/api/2023-10/inventory_levels.json?inventory_item_ids=${inventoryItemId}`,
+                {
+                    headers: {
+                        'X-Shopify-Access-Token': ADMIN_API_TOKEN,
+                    },
+                }
+            );
+
+            for (const level of inventoryLevels.data.inventory_levels) {
+                // Reduziere den Bestand um die verkaufte Menge
+                const newQty = Math.max(level.available - quantity, 0);
+
+                // Aktualisiere den Bestand
+                await axios.post(
+                    `https://${SHOP}/admin/api/2023-10/inventory_levels/set.json`,
+                    {
+                        location_id: level.location_id,
+                        inventory_item_id: inventoryItemId,
+                        available: newQty,
+                    },
+                    {
+                        headers: {
+                            'X-Shopify-Access-Token': ADMIN_API_TOKEN,
+                        },
+                    }
+                );
+            }
         }
-      }
-
-      if (matchingVariants.length === 0) {
-        console.warn(`Keine Varianten mit SKU ${sku} gefunden.`);
-        continue;
-      }
-
-      // Bestand holen von einer Variante
-      const inventoryItemId = matchingVariants[0].inventory_item_id;
-
-      const inventoryLevels = await axios.get(`https://${SHOPIFY_STORE}/admin/api/2023-10/inventory_levels.json?inventory_item_ids=${inventoryItemId}`, { headers });
-
-      const currentLevel = inventoryLevels.data.inventory_levels[0];
-
-      const newQuantity = currentLevel.available - quantityOrdered;
-
-      // Neue Menge setzen für alle Varianten mit dieser SKU
-      for (const variant of matchingVariants) {
-        const invItemId = variant.inventory_item_id;
-
-        await axios.post(`https://${SHOPIFY_STORE}/admin/api/2023-10/inventory_levels/set.json`, {
-          location_id: currentLevel.location_id,
-          inventory_item_id: invItemId,
-          available: newQuantity
-        }, { headers });
-
-        console.log(`✔️ Bestand für SKU ${sku} angepasst auf ${newQuantity}`);
-      }
     }
 
-    res.status(200).send('Bestand angepasst');
-
-  } catch (error) {
-    console.error('❌ Fehler beim Verarbeiten des Webhooks:', error.message);
-    res.status(500).send('Fehler beim Verarbeiten');
-  }
+    res.status(200).send('ok');
 });
 
-app.listen(PORT, () => {
-  console.log(`✅ Server läuft auf Port ${PORT}`);
+async function findVariantsBySKU(sku) {
+    const response = await axios.get(
+        `https://${SHOP}/admin/api/2023-10/variants.json?sku=${encodeURIComponent(sku)}`,
+        {
+            headers: {
+                'X-Shopify-Access-Token': ADMIN_API_TOKEN,
+            },
+        }
+    );
+    return response.data.variants;
+}
+
+app.listen(3000, () => {
+    console.log('Webhook listener running on port 3000');
 });
