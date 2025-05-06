@@ -77,7 +77,7 @@ app.post('/webhook', async (req, res) => {
           {
             location_id: inventoryLevel.location_id,
             inventory_item_id: inventoryLevel.inventory_item_id,
-            available: Math.max(lowestInventory - skuToQuantity[sku], 0),
+            available: lowestInventory,
           },
           {
             headers: {
