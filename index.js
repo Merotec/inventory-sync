@@ -1,7 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const app = express();
-const PORT = 3000;
+const PORT = 10000;
 
 const SHOP = 'merotec-shop.myshopify.com';
 const ADMIN_API_TOKEN = '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';
@@ -56,6 +56,11 @@ app.post('/webhook/order-created', async (req, res) => {
 
     if (!sku) continue;
 
+    if (processedSKUs.has(sku)) {
+      console.log(`⚠️ SKU ${sku} wurde bereits bearbeitet. Überspringen.`);
+      continue;
+    }
+
     try {
       const variants = await findVariantsBySKU(sku);
       let referenzLevel = null;
@@ -97,15 +102,24 @@ app.post('/webhook/order-created', async (req, res) => {
             }
           );
 
+          // Log mit Artikelname und Bestellmenge
           console.log(`✅ SKU ${sku} für Artikel "${variant.product_title}" (Bestell-ID: ${order.id}, Menge: ${orderedQuantity}): Neuer Bestand = ${referenzLevel}`);
           updatedInventoryItems.add(inventoryItemId);
           await sleep(500);
         }
       }
+
+      // Vermeide eine mehrfach Bearbeitung derselben SKU
+      processedSKUs.add(sku);
+
     } catch (err) {
       console.error(`❌ Fehler bei SKU ${sku}: ${err.message}`);
     }
   }
 
   res.status(200).send('OK');
+});
+
+app.listen(PORT, () => {
+  console.log(`✅ Server läuft auf Port ${PORT}`);
 });
