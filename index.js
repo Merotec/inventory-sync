@@ -54,8 +54,8 @@ app.post('/webhook', async (req, res) => {
               'X-Shopify-Access-Token': ADMIN_API_TOKEN,
             },
           }
-          await sleep(500);
         );
+await sleep(500);        
         
         inventoryLevels.push(...inventoryResponse.data.inventory_levels);
       }
@@ -77,8 +77,9 @@ app.post('/webhook', async (req, res) => {
               'X-Shopify-Access-Token': ADMIN_API_TOKEN,
             },
           }
-          await sleep(500);
         );
+await sleep(500);
+        
       }
 
       console.log(`✅ Bestand für SKU ${sku} auf den niedrigsten Wert gesetzt: ${lowestInventory}`);
@@ -102,8 +103,9 @@ async function findVariantsBySKU(sku) {
           'X-Shopify-Access-Token': ADMIN_API_TOKEN,
         },
       }
-      await sleep(500);
     );
+await sleep(500);
+    
     return response.data.variants;
   } catch (error) {
     console.error(`❌ Fehler beim Abrufen der Varianten für SKU ${sku}:`, error);
