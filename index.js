@@ -6,7 +6,7 @@ const app = express();
 app.use(bodyParser.json());
 
 const SHOP = 'https://merotec-shop.myshopify.com';
-const ADMIN_API_TOKEN = 'your-admin-api-access-token';
+const ADMIN_API_TOKEN = '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';
 
 app.post('/webhook/order-created', async (req, res) => {
     const order = req.body;
