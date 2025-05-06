@@ -1,15 +1,14 @@
 const express = require('express');
 const axios = require('axios');
-const bodyParser = require('body-parser');
 const app = express();
-const PORT = process.env.PORT || 10000;
+const PORT = 10000;
 
 const SHOP = 'merotec-shop.myshopify.com';
 const ADMIN_API_TOKEN = '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';
 
 const processedOrderIds = new Set();
 
-app.use(bodyParser.json());
+app.use(express.json());
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
