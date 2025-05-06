@@ -56,11 +56,6 @@ app.post('/webhook/order-created', async (req, res) => {
 
     if (!sku) continue;
 
-    if (processedSKUs.has(sku)) {
-      console.log(`⚠️ SKU ${sku} wurde bereits bearbeitet. Überspringen.`);
-      continue;
-    }
-
     try {
       const variants = await findVariantsBySKU(sku);
       let referenzLevel = null;
@@ -102,24 +97,15 @@ app.post('/webhook/order-created', async (req, res) => {
             }
           );
 
-          // Log mit Artikelname und Bestellmenge
-          console.log(`✅ SKU ${sku} für Artikel "${lineItem.name}" (Bestell-ID: ${order.id}, Menge: ${orderedQuantity}): Neuer Bestand = ${referenzLevel}`);
+          console.log(`✅ SKU ${sku} für Artikel "${variant.product_title}" (Bestell-ID: ${order.id}, Menge: ${orderedQuantity}): Neuer Bestand = ${referenzLevel}`);
           updatedInventoryItems.add(inventoryItemId);
           await sleep(500);
         }
       }
-
-      // Vermeide eine mehrfach Bearbeitung derselben SKU
-      processedSKUs.add(sku);
-
     } catch (err) {
       console.error(`❌ Fehler bei SKU ${sku}: ${err.message}`);
     }
   }
 
   res.status(200).send('OK');
-});
-
-app.listen(PORT, () => {
-  console.log(`✅ Server läuft auf Port ${PORT}`);
 });
