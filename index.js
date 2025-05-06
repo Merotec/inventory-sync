@@ -3,6 +3,10 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 // Shopify-Shopname und API-Token, die du anpassen musst
 const SHOP = 'merotec-shop.myshopify.com'; // Dein Shopify-Shopname
 const ADMIN_API_TOKEN = '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'; // Dein Shopify-API-Token
@@ -50,6 +54,7 @@ app.post('/webhook', async (req, res) => {
               'X-Shopify-Access-Token': ADMIN_API_TOKEN,
             },
           }
+          await sleep(500);
         );
         
         inventoryLevels.push(...inventoryResponse.data.inventory_levels);
@@ -66,6 +71,7 @@ app.post('/webhook', async (req, res) => {
             location_id: inventoryLevel.location_id,
             inventory_item_id: inventoryLevel.inventory_item_id,
             available: lowestInventory - skuToQuantity[sku], // Lagerbestand nach der Bestellung
+            await sleep(500);
           },
           {
             headers: {
