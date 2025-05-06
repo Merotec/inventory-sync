@@ -7,27 +7,38 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Shopify-Shopname und API-Token, die du anpassen musst
-const SHOP = 'merotec-shop.myshopify.com'; // Dein Shopify-Shopname
-const ADMIN_API_TOKEN = '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'; // Dein Shopify-API-Token
+// Shopify-Zugangsdaten
+const SHOP = 'merotec-shop.myshopify.com';
+const ADMIN_API_TOKEN = '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';
 
-// JSON-Middleware, damit der Server Shopify-Daten lesen kann
+// Set zum Speichern der verarbeiteten Bestellnummern
+const processedOrderIds = new Set();
+
 app.use(express.json());
 
-// Test-Webhook-Endpunkt
 app.post('/webhook', async (req, res) => {
   console.log('📦 Neue Bestellung empfangen!');
-  
-  const order = req.body;
-  const skuToQuantity = {};  // Object, um SKU und die Menge zu speichern
 
-  // Durch alle Bestellpositionen iterieren
+  const order = req.body;
+  const orderId = order.id; // Bestellnummer (Order ID)
+  
+  // Überprüfen, ob diese Bestellung bereits verarbeitet wurde
+  if (processedOrderIds.has(orderId)) {
+    console.log(`📦 Bestellung mit ID ${orderId} wurde bereits bearbeitet. Überspringen.`);
+    return res.status(200).send('OK'); // Bestell-ID schon verarbeitet, abbrechen
+  }
+
+  // Füge die Bestell-ID zur Liste der verarbeiteten Bestellungen hinzu
+  processedOrderIds.add(orderId);
+
+  const skuToQuantity = {}; // Objekt für SKU und Menge
+
+  // Bestellpositionen durchlaufen und SKU/Menge speichern
   for (const lineItem of order.line_items) {
     const sku = lineItem.sku;
     const quantity = lineItem.quantity;
 
     if (sku) {
-      // Menge für diese SKU speichern
       if (!skuToQuantity[sku]) {
         skuToQuantity[sku] = 0;
       }
@@ -35,18 +46,14 @@ app.post('/webhook', async (req, res) => {
     }
   }
 
-  // Für jede SKU die Varianten suchen und den Bestand anpassen
   for (const sku in skuToQuantity) {
     try {
-      // Hole alle Varianten mit dieser SKU
       const variants = await findVariantsBySKU(sku);
-      
-      // Bestände der Varianten ermitteln
+
       const inventoryLevels = [];
       for (const variant of variants) {
         const inventoryItemId = variant.inventory_item_id;
 
-        // Hole den aktuellen Lagerbestand für jedes Inventory Item
         const inventoryResponse = await axios.get(
           `https://${SHOP}/admin/api/2023-10/inventory_levels.json?inventory_item_ids=${inventoryItemId}`,
           {
@@ -55,22 +62,22 @@ app.post('/webhook', async (req, res) => {
             },
           }
         );
-await sleep(500);        
-        
+        await sleep(500);
+
         inventoryLevels.push(...inventoryResponse.data.inventory_levels);
       }
 
       // Finde den niedrigsten Lagerbestand
       const lowestInventory = Math.min(...inventoryLevels.map(level => level.available));
 
-      // Alle Varianten mit dieser SKU auf den niedrigsten Bestand setzen
+      // Bestände für alle Varianten dieser SKU anpassen
       for (const inventoryLevel of inventoryLevels) {
         await axios.post(
           `https://${SHOP}/admin/api/2023-10/inventory_levels/set.json`,
           {
             location_id: inventoryLevel.location_id,
             inventory_item_id: inventoryLevel.inventory_item_id,
-            available: lowestInventory - skuToQuantity[sku], // Lagerbestand nach der Bestellung
+            available: Math.max(lowestInventory - skuToQuantity[sku], 0),
           },
           {
             headers: {
@@ -78,8 +85,7 @@ await sleep(500);
             },
           }
         );
-await sleep(500);
-        
+        await sleep(500);
       }
 
       console.log(`✅ Bestand für SKU ${sku} auf den niedrigsten Wert gesetzt: ${lowestInventory}`);
@@ -89,11 +95,11 @@ await sleep(500);
     }
   }
 
-  // Sende erfolgreiche Antwort an Shopify
+  // Antwort an Shopify senden
   res.status(200).send('OK');
 });
 
-// Funktion, um Varianten für eine SKU zu finden
+// Funktion zum Abrufen von Varianten anhand der SKU
 async function findVariantsBySKU(sku) {
   try {
     const response = await axios.get(
@@ -104,8 +110,6 @@ async function findVariantsBySKU(sku) {
         },
       }
     );
-await sleep(500);
-    
     return response.data.variants;
   } catch (error) {
     console.error(`❌ Fehler beim Abrufen der Varianten für SKU ${sku}:`, error);
