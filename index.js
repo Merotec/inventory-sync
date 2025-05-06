@@ -71,13 +71,13 @@ app.post('/webhook', async (req, res) => {
             location_id: inventoryLevel.location_id,
             inventory_item_id: inventoryLevel.inventory_item_id,
             available: lowestInventory - skuToQuantity[sku], // Lagerbestand nach der Bestellung
-            await sleep(500);
           },
           {
             headers: {
               'X-Shopify-Access-Token': ADMIN_API_TOKEN,
             },
           }
+          await sleep(500);
         );
       }
 
@@ -102,6 +102,7 @@ async function findVariantsBySKU(sku) {
           'X-Shopify-Access-Token': ADMIN_API_TOKEN,
         },
       }
+      await sleep(500);
     );
     return response.data.variants;
   } catch (error) {
