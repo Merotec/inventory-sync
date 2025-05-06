@@ -7,10 +7,6 @@ const PORT = process.env.PORT || 10000;
 
 app.use(express.json());
 
-// Shopify Admin API Token und Shop-Name aus Umgebungsvariablen
-const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
-const SHOPIFY_STORE = process.env.SHOPIFY_STORE; // z. B. "deinshop.myshopify.com"
-
 const headers = {
   'X-Shopify-Access-Token': SHOPIFY_ACCESS_TOKEN,
   'Content-Type': 'application/json',
