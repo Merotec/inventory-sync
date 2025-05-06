@@ -1,125 +1,116 @@
 const express = require('express');
 const axios = require('axios');
+const bodyParser = require('body-parser');
+require('dotenv').config();
+
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-app.use(express.json());
-
-// Shopify-Zugangsdaten
 const SHOP = 'merotec-shop.myshopify.com';
 const ADMIN_API_TOKEN = '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';
 
-// Zum Speichern verarbeiteter Bestellungen
-const processedOrders = new Set();
+const processedOrderIds = new Set();
+
+app.use(bodyParser.json());
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-app.post('/webhook', async (req, res) => {
-  const order = req.body;
-  const orderId = order.id;
+async function findVariantsBySKU(sku) {
+  try {
+    const response = await axios.get(
+      `https://${SHOP}/admin/api/2023-10/variants.json?sku=${sku}`,
+      {
+        headers: {
+          'X-Shopify-Access-Token': ADMIN_API_TOKEN,
+        },
+      }
+    );
+    return response.data.variants || [];
+  } catch (err) {
+    console.error(`❌ Fehler beim Abrufen von Varianten für SKU ${sku}: ${err.message}`);
+    return [];
+  }
+}
 
-  if (processedOrders.has(orderId)) {
-    console.log(`📦 Bestellung ${orderId} bereits verarbeitet – übersprungen.`);
-    return res.status(200).send('Bereits verarbeitet');
+app.post('/webhook/order-created', async (req, res) => {
+  const order = req.body;
+
+  if (!order || !order.id) {
+    console.error('❌ Ungültige Bestelldaten erhalten');
+    return res.status(400).send('Bad Request');
   }
 
-  console.log(`📦 Neue Bestellung empfangen! ID: ${orderId}`);
+  if (processedOrderIds.has(order.id)) {
+    console.log(`📦 Bestellung mit ID ${order.id} wurde bereits bearbeitet. Überspringen.`);
+    return res.status(200).send('Already processed');
+  }
 
-  const skuToInventoryAfterOrder = {};
+  processedOrderIds.add(order.id);
+  console.log(`📦 Neue Bestellung empfangen! ID: ${order.id}`);
 
-  // 1. Schritt: Berechne neuen Bestand je SKU (nur Artikel aus Bestellung)
-  for (const item of order.line_items) {
-    const sku = item.sku;
-    const qty = item.quantity;
+  const updatedInventoryItems = new Set();
+
+  for (const lineItem of order.line_items) {
+    const sku = lineItem.sku;
+    const orderedQuantity = lineItem.quantity;
 
     if (!sku) continue;
 
     try {
       const variants = await findVariantsBySKU(sku);
+      let referenzLevel = null;
 
       for (const variant of variants) {
-        const invId = variant.inventory_item_id;
+        const inventoryItemId = variant.inventory_item_id;
 
-        const invResponse = await axios.get(
-          `https://${SHOP}/admin/api/2023-10/inventory_levels.json?inventory_item_ids=${invId}`,
+        if (updatedInventoryItems.has(inventoryItemId)) continue;
+
+        const inventoryResponse = await axios.get(
+          `https://${SHOP}/admin/api/2023-10/inventory_levels.json?inventory_item_ids=${inventoryItemId}`,
           {
-            headers: { 'X-Shopify-Access-Token': ADMIN_API_TOKEN },
+            headers: {
+              'X-Shopify-Access-Token': ADMIN_API_TOKEN,
+            },
           }
         );
 
-        const level = invResponse.data.inventory_levels[0];
-        if (!level) continue;
+        const currentLevel = inventoryResponse.data.inventory_levels[0];
 
-        const newQty = Math.max(level.available - qty, 0);
-        skuToInventoryAfterOrder[sku] = newQty;
+        if (!referenzLevel) {
+          referenzLevel = currentLevel.available - orderedQuantity;
+          if (referenzLevel < 0) referenzLevel = 0;
+        }
 
-        console.log(`✅ SKU ${sku} (Bestellt): Neuer Bestand = ${newQty}`);
-      }
-
-    } catch (err) {
-      console.error(`❌ Fehler bei SKU ${sku}:`, err.message);
-    }
-
-    await sleep(500); // Rate Limit
-  }
-
-  // 2. Schritt: Andere Varianten mit derselben SKU angleichen
-  for (const [sku, targetQty] of Object.entries(skuToInventoryAfterOrder)) {
-    try {
-      const variants = await findVariantsBySKU(sku);
-
-      for (const variant of variants) {
-        const invId = variant.inventory_item_id;
-
-        const invResponse = await axios.get(
-          `https://${SHOP}/admin/api/2023-10/inventory_levels.json?inventory_item_ids=${invId}`,
-          {
-            headers: { 'X-Shopify-Access-Token': ADMIN_API_TOKEN },
-          }
-        );
-
-        for (const level of invResponse.data.inventory_levels) {
+        if (currentLevel.available !== referenzLevel) {
           await axios.post(
             `https://${SHOP}/admin/api/2023-10/inventory_levels/set.json`,
             {
-              location_id: level.location_id,
-              inventory_item_id: level.inventory_item_id,
-              available: targetQty,
+              location_id: currentLevel.location_id,
+              inventory_item_id: inventoryItemId,
+              available: referenzLevel,
             },
             {
-              headers: { 'X-Shopify-Access-Token': ADMIN_API_TOKEN },
+              headers: {
+                'X-Shopify-Access-Token': ADMIN_API_TOKEN,
+                'Content-Type': 'application/json',
+              },
             }
           );
 
-          console.log(`🔄 SKU ${sku} synchronisiert auf Bestand ${targetQty}`);
+          console.log(`✅ SKU ${sku}: Neuer Bestand = ${referenzLevel}`);
+          updatedInventoryItems.add(inventoryItemId);
+          await sleep(500);
         }
-
-        await sleep(500); // Rate Limit
       }
-
     } catch (err) {
-      console.error(`❌ Fehler beim Synchronisieren der SKU ${sku}:`, err.message);
+      console.error(`❌ Fehler bei SKU ${sku}: ${err.message}`);
     }
   }
 
-  // Markiere die Bestellung als verarbeitet
-  processedOrders.add(orderId);
-
   res.status(200).send('OK');
 });
-
-// Hilfsfunktion: Finde alle Varianten einer SKU
-async function findVariantsBySKU(sku) {
-  const response = await axios.get(
-    `https://${SHOP}/admin/api/2023-10/variants.json?sku=${encodeURIComponent(sku)}`,
-    {
-      headers: { 'X-Shopify-Access-Token': ADMIN_API_TOKEN },
-    }
-  );
-  return response.data.variants;
-}
 
 app.listen(PORT, () => {
   console.log(`✅ Server läuft auf Port ${PORT}`);
