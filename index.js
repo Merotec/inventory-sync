@@ -3,9 +3,7 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+app.use(express.json());
 
 // Shopify-Zugangsdaten
 const SHOP = 'merotec-shop.myshopify.com';
