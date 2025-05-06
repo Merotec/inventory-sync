@@ -1,7 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const app = express();
-const PORT = 10000;
+const PORT = 3000;
 
 const SHOP = 'merotec-shop.myshopify.com';
 const ADMIN_API_TOKEN = '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';
