@@ -49,6 +49,7 @@ app.post('/webhook/order-created', async (req, res) => {
   console.log(`📦 Neue Bestellung empfangen! ID: ${order.id}`);
 
   const updatedInventoryItems = new Set();
+  const processedSKUs = new Set(); // ✅ Jetzt lokal nur für diese Bestellung
 
   for (const lineItem of order.line_items) {
     const sku = lineItem.sku;
@@ -102,15 +103,13 @@ app.post('/webhook/order-created', async (req, res) => {
             }
           );
 
-          // Log mit Artikelname und Bestellmenge
           console.log(`✅ SKU ${sku} für Artikel "${variant.product_title}" (Bestell-ID: ${order.id}, Menge: ${orderedQuantity}): Neuer Bestand = ${referenzLevel}`);
           updatedInventoryItems.add(inventoryItemId);
           await sleep(500);
         }
       }
 
-      // Vermeide eine mehrfach Bearbeitung derselben SKU
-      processedSKUs.add(sku);
+      processedSKUs.add(sku); // ✅ Nur für diese Bestellung relevant
 
     } catch (err) {
       console.error(`❌ Fehler bei SKU ${sku}: ${err.message}`);
