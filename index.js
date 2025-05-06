@@ -11,113 +11,118 @@ function sleep(ms) {
 const SHOP = 'merotec-shop.myshopify.com';
 const ADMIN_API_TOKEN = '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';
 
-// Set zum Speichern der verarbeiteten Bestellnummern
-const processedOrderIds = new Set();
+// Zum Speichern verarbeiteter Bestellungen
+const processedOrders = new Set();
 
-app.use(express.json());
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 app.post('/webhook', async (req, res) => {
-  console.log('📦 Neue Bestellung empfangen!');
-
   const order = req.body;
-  const orderId = order.id; // Bestellnummer (Order ID)
-  
-  // Überprüfen, ob diese Bestellung bereits verarbeitet wurde
-  if (processedOrderIds.has(orderId)) {
-    console.log(`📦 Bestellung mit ID ${orderId} wurde bereits bearbeitet. Überspringen.`);
-    return res.status(200).send('OK'); // Bestell-ID schon verarbeitet, abbrechen
+  const orderId = order.id;
+
+  if (processedOrders.has(orderId)) {
+    console.log(`📦 Bestellung ${orderId} bereits verarbeitet – übersprungen.`);
+    return res.status(200).send('Bereits verarbeitet');
   }
 
-  // Füge die Bestell-ID zur Liste der verarbeiteten Bestellungen hinzu
-  processedOrderIds.add(orderId);
+  console.log(`📦 Neue Bestellung empfangen! ID: ${orderId}`);
 
-  const skuToQuantity = {}; // Objekt für SKU und Menge
+  const skuToInventoryAfterOrder = {};
 
-  // Bestellpositionen durchlaufen und SKU/Menge speichern
-  for (const lineItem of order.line_items) {
-    const sku = lineItem.sku;
-    const quantity = lineItem.quantity;
+  // 1. Schritt: Berechne neuen Bestand je SKU (nur Artikel aus Bestellung)
+  for (const item of order.line_items) {
+    const sku = item.sku;
+    const qty = item.quantity;
 
-    if (sku) {
-      if (!skuToQuantity[sku]) {
-        skuToQuantity[sku] = 0;
-      }
-      skuToQuantity[sku] += quantity;
-    }
-  }
+    if (!sku) continue;
 
-  for (const sku in skuToQuantity) {
     try {
       const variants = await findVariantsBySKU(sku);
 
-      const inventoryLevels = [];
       for (const variant of variants) {
-        const inventoryItemId = variant.inventory_item_id;
+        const invId = variant.inventory_item_id;
 
-        const inventoryResponse = await axios.get(
-          `https://${SHOP}/admin/api/2023-10/inventory_levels.json?inventory_item_ids=${inventoryItemId}`,
+        const invResponse = await axios.get(
+          `https://${SHOP}/admin/api/2023-10/inventory_levels.json?inventory_item_ids=${invId}`,
           {
-            headers: {
-              'X-Shopify-Access-Token': ADMIN_API_TOKEN,
-            },
+            headers: { 'X-Shopify-Access-Token': ADMIN_API_TOKEN },
           }
         );
-        await sleep(500);
 
-        inventoryLevels.push(...inventoryResponse.data.inventory_levels);
+        const level = invResponse.data.inventory_levels[0];
+        if (!level) continue;
+
+        const newQty = Math.max(level.available - qty, 0);
+        skuToInventoryAfterOrder[sku] = newQty;
+
+        console.log(`✅ SKU ${sku} (Bestellt): Neuer Bestand = ${newQty}`);
       }
 
-      // Finde den niedrigsten Lagerbestand
-      const lowestInventory = Math.min(...inventoryLevels.map(level => level.available));
+    } catch (err) {
+      console.error(`❌ Fehler bei SKU ${sku}:`, err.message);
+    }
 
-      // Bestände für alle Varianten dieser SKU anpassen
-      for (const inventoryLevel of inventoryLevels) {
-        await axios.post(
-          `https://${SHOP}/admin/api/2023-10/inventory_levels/set.json`,
+    await sleep(500); // Rate Limit
+  }
+
+  // 2. Schritt: Andere Varianten mit derselben SKU angleichen
+  for (const [sku, targetQty] of Object.entries(skuToInventoryAfterOrder)) {
+    try {
+      const variants = await findVariantsBySKU(sku);
+
+      for (const variant of variants) {
+        const invId = variant.inventory_item_id;
+
+        const invResponse = await axios.get(
+          `https://${SHOP}/admin/api/2023-10/inventory_levels.json?inventory_item_ids=${invId}`,
           {
-            location_id: inventoryLevel.location_id,
-            inventory_item_id: inventoryLevel.inventory_item_id,
-            available: lowestInventory,
-          },
-          {
-            headers: {
-              'X-Shopify-Access-Token': ADMIN_API_TOKEN,
-            },
+            headers: { 'X-Shopify-Access-Token': ADMIN_API_TOKEN },
           }
         );
-        await sleep(500);
+
+        for (const level of invResponse.data.inventory_levels) {
+          await axios.post(
+            `https://${SHOP}/admin/api/2023-10/inventory_levels/set.json`,
+            {
+              location_id: level.location_id,
+              inventory_item_id: level.inventory_item_id,
+              available: targetQty,
+            },
+            {
+              headers: { 'X-Shopify-Access-Token': ADMIN_API_TOKEN },
+            }
+          );
+
+          console.log(`🔄 SKU ${sku} synchronisiert auf Bestand ${targetQty}`);
+        }
+
+        await sleep(500); // Rate Limit
       }
 
-      console.log(`✅ Bestand für SKU ${sku} auf den niedrigsten Wert gesetzt: ${lowestInventory}`);
-
-    } catch (error) {
-      console.error(`❌ Fehler beim Aktualisieren des Bestands für SKU ${sku}:`, error);
+    } catch (err) {
+      console.error(`❌ Fehler beim Synchronisieren der SKU ${sku}:`, err.message);
     }
   }
 
-  // Antwort an Shopify senden
+  // Markiere die Bestellung als verarbeitet
+  processedOrders.add(orderId);
+
   res.status(200).send('OK');
 });
 
-// Funktion zum Abrufen von Varianten anhand der SKU
+// Hilfsfunktion: Finde alle Varianten einer SKU
 async function findVariantsBySKU(sku) {
-  try {
-    const response = await axios.get(
-      `https://${SHOP}/admin/api/2023-10/variants.json?sku=${encodeURIComponent(sku)}`,
-      {
-        headers: {
-          'X-Shopify-Access-Token': ADMIN_API_TOKEN,
-        },
-      }
-    );
-    return response.data.variants;
-  } catch (error) {
-    console.error(`❌ Fehler beim Abrufen der Varianten für SKU ${sku}:`, error);
-    return [];
-  }
+  const response = await axios.get(
+    `https://${SHOP}/admin/api/2023-10/variants.json?sku=${encodeURIComponent(sku)}`,
+    {
+      headers: { 'X-Shopify-Access-Token': ADMIN_API_TOKEN },
+    }
+  );
+  return response.data.variants;
 }
 
-// Server starten
 app.listen(PORT, () => {
   console.log(`✅ Server läuft auf Port ${PORT}`);
 });
